@@ -2,29 +2,363 @@
 title: "Data607_Project2"
 author: "Ryan Weber"
 date: "March 11, 2018"
-output: html_document
+output:
+  html_document:
+      theme: cerulean
+      highlight: pygments
 ---
 
 ```{r setup, include=FALSE}
+rm(list=ls())
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(ggplot2)
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+Files and data stored at: https://github.com/rweberc/Data607_Project2
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+# Electricity demand (contributed by Rose Koh)
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+Net actual interchange (electric):  The algebraic sum of all metered interchange over all interconnections between two physically Adjacent Balancing Authority Areas. NERC definition
+https://www.eia.gov/tools/glossary/?id=electricity
 
-```{r cars}
-summary(cars)
+### Read in data
+
+```{r}
+elecDf <- read.csv("https://raw.githubusercontent.com/rweberc/Data607_Project2/master/electricity.csv", stringsAsFactors = FALSE, colClasses = "character", skip = 4)
 ```
 
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+### Confirm data structure:
+- Every second line "Demand"
+- Every third line ""
+- Every fourth line "Total net actual interchange"
+```{r}
+stopifnot(all(elecDf$megawatthours[c(FALSE, TRUE, FALSE, FALSE)] == "Demand"))
+stopifnot(all(elecDf$megawatthours[c(FALSE, FALSE, TRUE, FALSE)] == "Net generation"))
+stopifnot(all(elecDf$megawatthours[c(FALSE, FALSE, FALSE, TRUE)] == "Total net actual interchange"))
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+### Extract region names
+```{r}
+elecDf$region <- NA
+elecDf$region[c(TRUE, FALSE, FALSE, FALSE)] <- elecDf$megawatthours[c(TRUE, FALSE, FALSE, FALSE)]
+
+elecDf <- elecDf %>% fill(region)
+table(elecDf$region, useNA = "ifany")
+
+elecDf$region[c(TRUE, FALSE, FALSE, FALSE)] <- ""
+```
+
+### update column names
+```{r}
+elecDf <- elecDf %>% rename(category = megawatthours)
+elecDf <- elecDf %>% select(category, region, everything())
+
+colnames(elecDf) <- str_replace(colnames(elecDf), "X", "")
+colnames(elecDf) <- str_replace_all(colnames(elecDf), "\\.", "/")
+
+colnames(elecDf)
+```
+
+### Wide to long
+```{r}
+elecDf_long <- elecDf %>% gather("evalDay", "megawatthours", 3:length(.))
+```
+
+### Clean data in long form
+```{r}
+# data check
+elecDf_long$megawatthours[elecDf_long$megawatthours == " Inc. (region)"] <- ""
+stopifnot(elecDf_long$megawatthours[str_trim(elecDf_long$region) == ""] == "")
+
+# filter out unneed "region" rows
+elecDf_long <- elecDf_long %>% filter(str_trim(region) != "")
+
+# parse day and megawatthours
+elecDf_long$evalDay <- mdy(elecDf_long$evalDay)
+elecDf_long$megawatthours <- as.numeric(elecDf_long$megawatthours)
+```
+
+### Long to wide
+```{r}
+elecDf <- elecDf_long %>% spread(category, megawatthours)
+rm(elecDf_long)
+
+# data check: confirm no megawatt hours are NA
+stopifnot(nrow(elecDf %>% filter_if(is.Date, any_vars(is.na(.)))) == 0)
+```
+
+### Suggested analyses
+*  daily demand per region
+*  daily net generation per region
+*  daily total net actual interchange
+```{r}
+perRegionAvg <- elecDf %>% 
+  group_by(region) %>%
+  summarize(demandAvg = mean(Demand),
+                                     netGenAvg = mean(`Net generation`),
+                                     totInterchgAvg = mean(`Total net actual interchange`))
+
+ggplot(perRegionAvg, aes(x=region, y=totInterchgAvg)) + 
+  geom_bar(stat = "identity") +
+  labs(title = "Avg Interchange values", x = "Region", y = "Averge Interchange") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0))
+
+```
+
+California looks to have the greatest deficits, while the northwest region looks to have the greatest surplus.
+
+*  Any particular days were demand was greater than production?
+```{r}
+dayDf <- elecDf %>% 
+  ungroup() %>%
+  mutate(evalDayOfWeek = wday(evalDay, label = TRUE)) %>%
+  group_by(region, evalDayOfWeek) %>%
+  summarize(demandAvg = mean(Demand),
+                                     netGenAvg = mean(`Net generation`),
+                                     totInterchgAvg = mean(`Total net actual interchange`))
+
+ggplot(dayDf, aes(x = region, y = totInterchgAvg)) + 
+  geom_bar(aes(fill = evalDayOfWeek), position = "dodge", stat = "identity") +
+  labs(title = "Avg Interchange values", x = "Region", y = "Averge Interchange") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0))
+```
+
+Net values do not seem dependent on days.
+
+# Marraige/Divorce Rates (contributed by Jiadi Li)
+
+### Read in data
+```{r}
+mdDf <- read.csv("https://raw.githubusercontent.com/xiaoxiaogao-DD/DATA607-Project1/master/national_marriage_divorce_rates_00-16.csv", stringsAsFactors = FALSE, skip = 2, header = TRUE, colClasses = "character")
+```
+
+### Remove blank columns
+```{r}
+# Confirm all values are blank for last columns
+stopifnot(nrow(mdDf %>% filter_if(str_detect(colnames(.), "X"), all_vars(. != ""))) == 0)
+
+# Remove these rows
+mdDf <- mdDf[, !str_detect(colnames(mdDf), "X")]
+```
+
+
+
+### Split apart separate dataframes
+```{r}
+marrDf <- mdDf[1:27,]
+divDf <- mdDf[29:nrow(mdDf),]
+```
+
+### Adust column names
+```{r}
+colnames(divDf) <- divDf[1, ]
+```
+
+### Extract footnote data into dataframe
+```{r}
+# Save out total row numbers to confirm logic to split off footnotes was reasonable
+marrRows <- nrow(marrDf)
+divRows <- nrow(divDf)
+
+marrFtDf <- marrDf %>% filter(!str_detect(Year, "^20."))
+divFtDf <- divDf %>% filter(!str_detect(Year, "^20."))
+
+marrDf <- marrDf %>% filter(str_detect(Year, "^20."))
+divDf <- divDf %>% filter(str_detect(Year, "^20."))
+
+stopifnot(marrRows == nrow(marrFtDf) + nrow(marrDf))
+stopifnot(divRows == nrow(divFtDf) + nrow(divDf))
+```
+
+### Parse footnote dataframes
+```{r}
+marrFtDf <- marrFtDf %>%
+  rename(raw = Year) %>%
+  select(raw) %>%
+  filter(str_trim(raw) != "") %>%
+  mutate(footId = as.numeric(str_extract(raw, "^[:digit:]+")),
+         footnote = str_replace(raw, "^[:digit:]+/", "")) %>%
+  filter(!is.na(footId)) %>%
+  select(footId, footnote)
+
+divFtDf <- divFtDf %>%
+  rename(raw = Year) %>%
+  select(raw) %>%
+  filter(str_trim(raw) != "") %>%
+  mutate(footId = as.numeric(str_extract(raw, "^[:digit:]+")),
+         footnote = str_replace(raw, "^[:digit:]+ ", "")) %>%
+  filter(!is.na(footId)) %>%
+  select(footId, footnote)
+```
+
+
+### Parse numerics in main dataframes
+```{r}
+# Extract footnote information from Year column
+marrDf$footId <- str_extract(marrDf$Year, "/.")
+marrDf$Year <- str_replace(marrDf$Year, "/.", "")
+marrDf$footId <- str_replace(marrDf$footId, "/", "")
+
+divDf$footId <- str_extract(divDf$Year, "/.")
+divDf$Year <- str_replace(divDf$Year, "/.", "")
+divDf$footId <- str_replace(divDf$footId, "/", "")
+
+# remove commas
+marrDf <- marrDf %>% mutate_all(funs(str_replace_all(., ",", "")))
+divDf <- divDf %>% mutate_all(funs(str_replace_all(., ",", "")))
+
+# parse all columns as numerics
+marrDf <- marrDf %>% mutate_all(as.numeric)
+divDf <- divDf %>% mutate_all(as.numeric)
+```
+
+### Merge in footnotes
+```{r}
+marrDf <- left_join(marrDf, marrFtDf, by="footId")
+divDf <- left_join(divDf, divFtDf, by="footId")
+rm(mdDf, marrFtDf, divFtDf)
+```
+
+### Merge marraige and divorce dataframes
+```{r}
+marrDf <- marrDf %>%
+  rename(marriages = Marriages,
+         marrPopulation = Population,
+         marrRatePer1000 = Rate.per.1.000.total.population,
+         marrFootnote = footnote) %>%
+  select(-footId)
+
+divDf <- divDf %>%
+  rename(divPopulation = Population,
+         divRatePer1000 = `Rate per 1,000 total population`,
+         divFootnote = footnote,
+         divAnnul = `Divorces & annulments`) %>%
+  select(-footId)
+
+finalDf <- full_join(marrDf, divDf, by = "Year") %>%
+  select(Year, marriages, divAnnul, marrPopulation, divPopulation, marrRatePer1000, divRatePer1000,
+         marrFootnote, divFootnote)
+
+rm(divDf, marrDf)
+```
+
+### Suggested Analyses
+
+ * Is the decrease in the divorce rate due to the decrease in the marriage rate? 
+
+    As noted, there are pretty large differences in population between the two data sets...
+    So it's not easy to compare marriage and divorce rates per year, but we can look at the data broadly.
+    
+    Since couples may be unlikely to divorce just in the first year of marriage, maybe it would be useful
+    to look at overlaid line graphs to see if there's any trends that seem to occur on a delay of several years
+
+```{r}
+ggplot(finalDf, aes(Year)) + 
+  geom_line(aes(y = marrRatePer1000, colour = "marrRatePer1000")) + 
+  geom_line(aes(y = divRatePer1000, colour = "divRatePer1000"))  +
+  labs(title = "Marriage/Divorce Rates", x = "Year", y = "Rate Per 1000") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+# RNA_DNA
+
+### Read in data
+```{r}
+rawDf <- read.csv("https://raw.githubusercontent.com/heathergeiger/Data607_data_to_tidy/master/RNA_vs_DNA_example_sample_sheet.csv", stringsAsFactors = FALSE, header = FALSE, colClasses = "character")
+```
+
+### Split dataframe vertically, bind into one data set
+```{r}
+rawDf1 <- rawDf[, 1:6]
+rawDf2 <- rawDf[, 8:13]
+
+colnames(rawDf1) <- letters[1:length(rawDf1)]
+colnames(rawDf2) <- letters[1:length(rawDf2)]
+
+fullDf <- bind_rows(rawDf1, rawDf2)
+
+rm(rawDf, rawDf1, rawDf2)
+```
+
+### Extract group numbers
+```{r}
+fullDf$groupNum <- str_extract(fullDf$a, "[^0][:digit:]+") #Not sure why [^0][:digit:]+ is returning "p068", for instance
+fullDf$groupNum <- str_replace(fullDf$groupNum, "p0", "")
+
+fullDf <- fullDf %>% 
+  fill(groupNum) %>%
+  filter(!str_detect(a, "Group*"))
+```
+
+### Remove unneeded rows, adjust column names
+```{r}
+colnames(fullDf) <- fullDf[1, ]
+fullDf <- fullDf %>% rename(GroupNum = `68`)
+
+fullDf <- fullDf %>%
+  filter(!(Index == "" | Index == "Index"))
+```
+
+Seems worth keeping group number for now, in case we wanted to compare the data sources this references in later analysis
+
+### Additional tidying to be done:
+
+ * Replace the "_" in columns "Sample" and "WGS ID" with a "-".
+ 
+```{r}
+fullDf <- fullDf %>% mutate_at(vars("Sample", "WGS ID"), funs(str_replace_all(., "_", "-")))
+```
+ 
+ * Remove any text or underscores from WGS Quote ID to get just a five-digit number. We can count on this always being 5 digits if you want to use a regex.
+ 
+```{r}
+fullDf$`WGS Quote ID` <- str_extract(fullDf$`WGS Quote ID`, "[:digit:]+")
+stopifnot(all(str_count(fullDf$`WGS Quote ID`) == 5))
+
+fullDf$`WGS Quote ID` <- as.numeric(fullDf$`WGS Quote ID`)
+```
+ 
+ * Include an additional column that simplifies tissue type into just either "SpinalCord","Cerebellum", or "Cortex". Note that different sources may use either underscores or spaces between words in the tissue column, so best to use a regex rather than a simple match to translate these here.
+
+```{r}
+fullDf$`Tissue Type` <- str_replace_all(fullDf$`Tissue Type`, "_", " ")
+table(fullDf$`Tissue Type`, useNA = "ifany")
+```
+
+ * Also would be good to make sure there is only one project and gender per unique value in "WGS ID"
+ 
+```{r}
+# Is project number "Sample" or WGS Quote Id"?  or "GroupNum"
+fullDf %>% 
+  group_by(`WGS ID`, Gender, Sample) %>%
+  filter(n() != 1) %>% 
+  nrow()
+
+fullDf %>% 
+  group_by(`WGS ID`, Gender, `WGS Quote ID`) %>%
+  filter(n() != 1) %>%
+  nrow()
+```
+ 
+ Project seems to be "Sample", which has a unique WGS ID when grouped also by Gender
+ 
+ * ...and only unique tissues for each "WGS ID" (so no repeats of say "Spinal_Cord_Lumbar" for the same WGS ID).
+ 
+```{r}
+fullDf %>% 
+  group_by(`WGS ID`, `Tissue Type`) %>%
+  filter(n() != 1) %>% 
+  nrow()
+```
+ 
+ Tissue Type is unique by WGS ID
+ 
+
+ 

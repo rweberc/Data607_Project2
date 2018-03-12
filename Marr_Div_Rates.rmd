@@ -1,0 +1,159 @@
+---
+title: "Data607_Project2 - Marriage/Divorce Rates"
+author: "Ryan Weber"
+date: "March 11, 2018"
+output:
+  html_document:
+      theme: cerulean
+      highlight: pygments
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(ggplot2)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+### Read in data
+```{r}
+mdDf <- read.csv("https://raw.githubusercontent.com/xiaoxiaogao-DD/DATA607-Project1/master/national_marriage_divorce_rates_00-16.csv", stringsAsFactors = FALSE, skip = 2, header = TRUE, colClasses = "character")
+```
+
+### Remove blank columns
+```{r}
+# Confirm all values are blank for last columns
+stopifnot(nrow(mdDf %>% filter_if(str_detect(colnames(.), "X"), all_vars(. != ""))) == 0)
+
+# Remove these rows
+mdDf <- mdDf[, !str_detect(colnames(mdDf), "X")]
+```
+
+
+
+### Split apart separate dataframes
+```{r}
+marrDf <- mdDf[1:27,]
+divDf <- mdDf[29:nrow(mdDf),]
+```
+
+### Adust column names
+```{r}
+colnames(divDf) <- divDf[1, ]
+```
+
+### Extract footnote data into dataframe
+```{r}
+# Save out total row numbers to confirm logic to split off footnotes was reasonable
+marrRows <- nrow(marrDf)
+divRows <- nrow(divDf)
+
+marrFtDf <- marrDf %>% filter(!str_detect(Year, "^20."))
+divFtDf <- divDf %>% filter(!str_detect(Year, "^20."))
+
+marrDf <- marrDf %>% filter(str_detect(Year, "^20."))
+divDf <- divDf %>% filter(str_detect(Year, "^20."))
+
+stopifnot(marrRows == nrow(marrFtDf) + nrow(marrDf))
+stopifnot(divRows == nrow(divFtDf) + nrow(divDf))
+```
+
+### Parse footnote dataframes
+```{r}
+marrFtDf <- marrFtDf %>%
+  rename(raw = Year) %>%
+  select(raw) %>%
+  filter(str_trim(raw) != "") %>%
+  mutate(footId = as.numeric(str_extract(raw, "^[:digit:]+")),
+         footnote = str_replace(raw, "^[:digit:]+/", "")) %>%
+  filter(!is.na(footId)) %>%
+  select(footId, footnote)
+
+divFtDf <- divFtDf %>%
+  rename(raw = Year) %>%
+  select(raw) %>%
+  filter(str_trim(raw) != "") %>%
+  mutate(footId = as.numeric(str_extract(raw, "^[:digit:]+")),
+         footnote = str_replace(raw, "^[:digit:]+ ", "")) %>%
+  filter(!is.na(footId)) %>%
+  select(footId, footnote)
+```
+
+
+### Parse numerics in main dataframes
+```{r}
+# Extract footnote information from Year column
+marrDf$footId <- str_extract(marrDf$Year, "/.")
+marrDf$Year <- str_replace(marrDf$Year, "/.", "")
+marrDf$footId <- str_replace(marrDf$footId, "/", "")
+
+divDf$footId <- str_extract(divDf$Year, "/.")
+divDf$Year <- str_replace(divDf$Year, "/.", "")
+divDf$footId <- str_replace(divDf$footId, "/", "")
+
+# remove commas
+marrDf <- marrDf %>% mutate_all(funs(str_replace_all(., ",", "")))
+divDf <- divDf %>% mutate_all(funs(str_replace_all(., ",", "")))
+
+# parse all columns as numerics
+marrDf <- marrDf %>% mutate_all(as.numeric)
+divDf <- divDf %>% mutate_all(as.numeric)
+```
+
+### Merge in footnotes
+```{r}
+marrDf <- left_join(marrDf, marrFtDf, by="footId")
+divDf <- left_join(divDf, divFtDf, by="footId")
+rm(mdDf, marrFtDf, divFtDf)
+```
+
+### Merge marraige and divorce dataframes
+```{r}
+marrDf <- marrDf %>%
+  rename(marriages = Marriages,
+         marrPopulation = Population,
+         marrRatePer1000 = Rate.per.1.000.total.population,
+         marrFootnote = footnote) %>%
+  select(-footId)
+
+divDf <- divDf %>%
+  rename(divPopulation = Population,
+         divRatePer1000 = `Rate per 1,000 total population`,
+         divFootnote = footnote,
+         divAnnul = `Divorces & annulments`) %>%
+  select(-footId)
+
+finalDf <- full_join(marrDf, divDf, by = "Year") %>%
+  select(Year, marriages, divAnnul, marrPopulation, divPopulation, marrRatePer1000, divRatePer1000,
+         marrFootnote, divFootnote)
+
+rm(divDf, marrDf)
+```
+
+### Suggested Analyses
+
+ * Is the decrease in the divorce rate due to the decrease in the marriage rate? 
+
+    As noted, there are pretty large differences in population between the two data sets...
+    So it's not easy to compare marriage and divorce rates per year, but we can look at the data broadly.
+    
+    Since couples may be unlikely to divorce just in the first year of marriage, maybe it would be useful
+    to look at overlaid line graphs to see if there's any trends that seem to occur on a delay of several years
+
+```{r}
+ggplot(finalDf, aes(Year)) + 
+  geom_line(aes(y = marrRatePer1000, colour = "marrRatePer1000")) + 
+  geom_line(aes(y = divRatePer1000, colour = "divRatePer1000"))  +
+  labs(title = "Marriage/Divorce Rates", x = "Year", y = "Rate Per 1000") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+From the above, it's not easy to discern subtle trends, but overall, it does look like a decrease in marriages is at least correlated with a decrease in divorce rates.
+
+
+
+
