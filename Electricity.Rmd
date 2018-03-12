@@ -1,0 +1,132 @@
+---
+title: "Data607_Project2 - Electricity"
+author: "Ryan Weber"
+date: "March 11, 2018"
+output:
+  html_document:
+      theme: cerulean
+      highlight: pygments
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(ggplot2)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Files and data stored at: https://github.com/rweberc/Data607_Project2
+
+# Electricity demand (contributed by Rose Koh)
+
+Net actual interchange (electric):  The algebraic sum of all metered interchange over all interconnections between two physically Adjacent Balancing Authority Areas. NERC definition
+https://www.eia.gov/tools/glossary/?id=electricity
+
+### Read in data
+
+```{r}
+elecDf <- read.csv("https://raw.githubusercontent.com/rweberc/Data607_Project2/master/electricity.csv", stringsAsFactors = FALSE, colClasses = "character", skip = 4)
+```
+
+### Confirm data structure:
+- Every second line "Demand"
+- Every third line ""
+- Every fourth line "Total net actual interchange"
+```{r}
+stopifnot(all(elecDf$megawatthours[c(FALSE, TRUE, FALSE, FALSE)] == "Demand"))
+stopifnot(all(elecDf$megawatthours[c(FALSE, FALSE, TRUE, FALSE)] == "Net generation"))
+stopifnot(all(elecDf$megawatthours[c(FALSE, FALSE, FALSE, TRUE)] == "Total net actual interchange"))
+```
+
+### Extract region names
+```{r}
+elecDf$region <- NA
+elecDf$region[c(TRUE, FALSE, FALSE, FALSE)] <- elecDf$megawatthours[c(TRUE, FALSE, FALSE, FALSE)]
+
+elecDf <- elecDf %>% fill(region)
+table(elecDf$region, useNA = "ifany")
+
+elecDf$region[c(TRUE, FALSE, FALSE, FALSE)] <- ""
+```
+
+### Update column names
+```{r}
+elecDf <- elecDf %>% rename(category = megawatthours)
+elecDf <- elecDf %>% select(category, region, everything())
+
+colnames(elecDf) <- str_replace(colnames(elecDf), "X", "")
+colnames(elecDf) <- str_replace_all(colnames(elecDf), "\\.", "/")
+
+colnames(elecDf)
+```
+
+### Wide to long
+```{r}
+elecDf_long <- elecDf %>% gather("evalDay", "megawatthours", 3:length(.))
+```
+
+### Clean data in long form
+```{r}
+# data check
+elecDf_long$megawatthours[elecDf_long$megawatthours == " Inc. (region)"] <- ""
+stopifnot(elecDf_long$megawatthours[str_trim(elecDf_long$region) == ""] == "")
+
+# filter out unneed "region" rows
+elecDf_long <- elecDf_long %>% filter(str_trim(region) != "")
+
+# parse day and megawatthours
+elecDf_long$evalDay <- mdy(elecDf_long$evalDay)
+elecDf_long$megawatthours <- as.numeric(elecDf_long$megawatthours)
+```
+
+### Long to wide
+```{r}
+elecDf <- elecDf_long %>% spread(category, megawatthours)
+rm(elecDf_long)
+
+# data check: confirm no megawatt hours are NA
+stopifnot(nrow(elecDf %>% filter_if(is.Date, any_vars(is.na(.)))) == 0)
+```
+
+### Suggested analyses
+*  daily demand per region
+*  daily net generation per region
+*  daily total net actual interchange
+```{r}
+perRegionAvg <- elecDf %>% 
+  group_by(region) %>%
+  summarize(demandAvg = mean(Demand),
+                                     netGenAvg = mean(`Net generation`),
+                                     totInterchgAvg = mean(`Total net actual interchange`))
+
+ggplot(perRegionAvg, aes(x=region, y=totInterchgAvg)) + 
+  geom_bar(stat = "identity") +
+  labs(title = "Avg Interchange values", x = "Region", y = "Averge Interchange") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0))
+
+```
+
+California looks to have the greatest deficits, while the northwest region looks to have the greatest surplus.
+
+*  Any particular days were demand was greater than production?
+```{r}
+dayDf <- elecDf %>% 
+  ungroup() %>%
+  mutate(evalDayOfWeek = wday(evalDay, label = TRUE)) %>%
+  group_by(region, evalDayOfWeek) %>%
+  summarize(demandAvg = mean(Demand),
+                                     netGenAvg = mean(`Net generation`),
+                                     totInterchgAvg = mean(`Total net actual interchange`))
+
+ggplot(dayDf, aes(x = region, y = totInterchgAvg)) + 
+  geom_bar(aes(fill = evalDayOfWeek), position = "dodge", stat = "identity") +
+  labs(title = "Avg Interchange values", x = "Region", y = "Averge Interchange") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0))
+```
+
+Net values do not seem dependent on days.
