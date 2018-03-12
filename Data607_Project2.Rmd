@@ -52,7 +52,7 @@ table(elecDf$region, useNA = "ifany")
 elecDf$region[c(TRUE, FALSE, FALSE, FALSE)] <- ""
 ```
 
-### update column names
+### Update column names
 ```{r}
 elecDf <- elecDf %>% rename(category = megawatthours)
 elecDf <- elecDf %>% select(category, region, everything())
@@ -267,7 +267,7 @@ ggplot(finalDf, aes(Year)) +
 ```
 
 
-# RNA_DNA
+# RNA_DNA (contributed by Heather Geiger)
 
 ### Read in data
 ```{r}
